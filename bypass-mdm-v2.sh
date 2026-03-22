@@ -5,7 +5,6 @@ RED='\033[1;31m'
 GRN='\033[1;32m'
 BLU='\033[1;34m'
 YEL='\033[1;33m'
-PUR='\033[1;35m'
 CYAN='\033[1;36m'
 NC='\033[0m'
 
@@ -85,7 +84,7 @@ check_user_exists() {
 	local dscl_path="$1"
 	local username="$2"
 
-	if dscl -f "$dscl_path" localhost -read "/Local/Default/Users/$username" 2>/dev/null; then
+	if dscl -f "$dscl_path" localhost -read "/Local/Default/Users/$username" >/dev/null 2>&1; then
 		return 0 # User exists
 	else
 		return 1 # User doesn't exist
@@ -106,8 +105,7 @@ find_available_uid() {
 		uid=$((uid + 1))
 	done
 
-	echo "501" # Default fallback
-	return 1
+	return 1 # No available UID found in range
 }
 
 # Function to detect system volumes with multiple fallback strategies
@@ -117,14 +115,13 @@ detect_volumes() {
 
 	info "Detecting system volumes..." >&2
 
-	# Strategy 1: Look for common macOS APFS volume patterns
-	# List all volumes and look for system volume (ends with or contains common names)
+	# Find the system volume: must have a /System directory and not be a Data or Recovery volume
+	# Note: Data$ (end-anchor) excludes volumes ending in "Data" (e.g. "Macintosh HD - Data"),
+	# while Recovery (unanchored) excludes volumes containing "Recovery" anywhere (e.g. "macOS Recovery").
 	for vol in /Volumes/*; do
-		if [ -d "$vol" ]; then
+		if [ -d "$vol" ] && [ -d "$vol/System" ]; then
 			vol_name=$(basename "$vol")
-
-			# Check if this looks like a system volume (not Data, not recovery)
-			if [[ ! "$vol_name" =~ "Data"$ ]] && [[ ! "$vol_name" =~ "Recovery" ]] && [ -d "$vol/System" ]; then
+			if [[ ! "$vol_name" =~ Data$ ]] && [[ ! "$vol_name" =~ Recovery ]]; then
 				system_vol="$vol_name"
 				info "Found system volume: $system_vol" >&2
 				break
@@ -132,7 +129,7 @@ detect_volumes() {
 		fi
 	done
 
-	# Strategy 2: If no system volume found, try looking for any volume with /System directory
+	# Fallback: accept any volume that has a /System directory
 	if [ -z "$system_vol" ]; then
 		for vol in /Volumes/*; do
 			if [ -d "$vol/System" ]; then
@@ -143,7 +140,7 @@ detect_volumes() {
 		done
 	fi
 
-	# Strategy 3: Check for Data volume
+	# Check for Data volume
 	if [ -d "/Volumes/Data" ]; then
 		data_vol="Data"
 		info "Found data volume: $data_vol" >&2
@@ -297,10 +294,12 @@ select opt in "${options[@]}"; do
 
 		# Find available UID
 		info "Checking for available UID..."
-		available_uid=$(find_available_uid "$dscl_path")
-		if [ $? -eq 0 ] && [ "$available_uid" != "501" ]; then
-			info "UID 501 is in use, using UID $available_uid instead"
+		if available_uid=$(find_available_uid "$dscl_path"); then
+			if [ "$available_uid" != "501" ]; then
+				info "UID 501 is in use, using UID $available_uid instead"
+			fi
 		else
+			warn "No available UID found in range 501-599, defaulting to 501"
 			available_uid="501"
 		fi
 		success "Using UID: $available_uid"
